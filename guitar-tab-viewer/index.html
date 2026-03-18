@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="zh-Hans">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#F4EFE8" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+
+    <link rel="manifest" href="./manifest.webmanifest?v=13" />
+    <link rel="icon" href="./assets/icon-192.png" />
+    <link rel="apple-touch-icon" href="./assets/icon-192.png" />
+
+    <title>吉他谱</title>
+    <link rel="stylesheet" href="./styles.css?v=13" />
+  </head>
+  <body>
+    <div id="app" class="app">
+      <main class="pages" aria-label="页面">
+        <!-- Home -->
+        <section id="pageHome" class="page is-active" data-page="home" aria-label="首页">
+          <div class="page__scroll">
+            <div class="pageHead">
+              <div class="pageHead__title">欢迎回来！</div>
+              <div class="pageHead__sub">继续保持你的进步</div>
+            </div>
+
+            <div class="grid2">
+              <div class="card card--accent">
+                <div class="card__kpi">
+                  <div class="kpi__label">连续打卡</div>
+                  <div class="kpi__value">12<span class="kpi__unit">天</span></div>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card__kpi">
+                  <div class="kpi__label">总经验值</div>
+                  <div class="kpi__value">2450</div>
+                  <div class="kpi__sub">等级 12</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card__title">每日目标进度</div>
+              <div class="progressRow">
+                <div class="progressRing">
+                  <div class="progressRing__val">82%</div>
+                </div>
+                <div class="progressStats">
+                  <div class="statLine">
+                    <div class="statLine__label">练习时长</div>
+                    <div class="statLine__bar"><div class="statLine__fill" style="width: 62%"></div></div>
+                    <div class="statLine__val">342 分钟</div>
+                  </div>
+                  <div class="statLine">
+                    <div class="statLine__label">本周歌曲</div>
+                    <div class="statLine__bar"><div class="statLine__fill" style="width: 80%"></div></div>
+                    <div class="statLine__val">4 / 5</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="sectionTitle">快速开始</div>
+            <div class="grid2">
+              <button id="btnGoPractice" class="cardBtn cardBtn--accent" type="button">每日练习</button>
+              <button id="btnGoScores" class="cardBtn" type="button">浏览曲谱</button>
+            </div>
+
+            <div class="sectionTitle">最近练习</div>
+            <div class="list">
+              <div class="listItem muted">之后会在这里显示你最近打开过的曲谱（当前为静态占位）。</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Scores -->
+        <section id="pageScores" class="page" data-page="scores" aria-label="曲谱">
+          <div class="page__scroll">
+            <div id="scoresHead" class="pageHead pageHead--row">
+              <div>
+                <div class="pageHead__title">曲谱库</div>
+                <div class="pageHead__sub">支持本地导入，离线可用</div>
+              </div>
+              <button id="btnNewSong" class="pill pill--accent" type="button">新建曲谱</button>
+            </div>
+
+            <!-- Library mode -->
+            <div id="scoresLibrary">
+              <div class="search">
+                <div class="search__icon" aria-hidden="true">🔎</div>
+                <input id="searchInput" class="search__input" type="search" placeholder="搜索歌名或者艺术家..." />
+              </div>
+
+              <div class="chips">
+                <button id="btnFilterAll" class="chip is-active" type="button">全部曲谱</button>
+                <button id="btnFilterFav" class="chip" type="button">我的收藏</button>
+                <button id="btnFilterRecent" class="chip" type="button">最近练习</button>
+                <button id="btnImportHelp" class="chip chip--ghost" type="button">支持格式</button>
+                <button id="btnClearAll" class="chip chip--danger" type="button">清空曲库</button>
+              </div>
+
+              <div class="sectionTitle sectionTitle--icon">
+                <span class="sectionTitle__icon" aria-hidden="true">📈</span>
+                热门曲谱
+              </div>
+              <div id="featuredList" class="hScroll" aria-label="热门曲谱列表"></div>
+              <div id="featuredEmpty" class="muted" hidden>创建一些曲谱后，这里会显示你常用的曲谱。</div>
+
+              <div class="sectionTitle">全部歌曲</div>
+              <div id="libraryEmpty" class="empty" hidden>
+                <div class="empty__title">还没有创建曲谱</div>
+                <div class="empty__sub">点击右上角“新建曲谱”开始</div>
+              </div>
+              <div id="libraryList" class="list" role="list"></div>
+            </div>
+
+            <!-- 曲谱详情已移动到独立页面（pageScoreDetail） -->
+          </div>
+        </section>
+
+        <!-- Score Detail -->
+        <section id="pageScoreDetail" class="page" data-page="score" aria-label="曲谱详情">
+          <div id="scoreDetailScroll" class="page__scroll">
+            <div class="detailHead detailHead--sticky">
+              <button id="btnBackToLibrary" class="navBtn" type="button" aria-label="返回">‹</button>
+              <div class="detailHead__meta">
+                <div id="detailTitle" class="detailHead__title">曲谱</div>
+                <div id="detailSub" class="detailHead__sub">本地 · 0 页</div>
+              </div>
+              <div class="detailHead__actions">
+                <button id="btnImportPages" class="navPill navPill--accent" type="button">导入页面</button>
+                <button id="btnDeleteSong" class="navPill" type="button">删除曲谱</button>
+              </div>
+            </div>
+
+            <input
+              id="importPagesFiles"
+              type="file"
+              multiple
+              accept=".txt,.tab,.pro,.chopro,.md,.pdf,image/*"
+              class="fileInput"
+            />
+
+            <div class="detailQuick detailQuick--sticky">
+              <button id="btnMetronome" class="navPill" type="button">收起节拍器</button>
+              <button id="btnAutoScroll" class="navPill navPill--accent" type="button">自动滚动</button>
+            </div>
+
+            <div id="metronomeControls" class="metro">
+              <div class="metro__row">
+                <div class="metro__label">BPM</div>
+                <input id="metroBpm" type="range" min="40" max="240" step="1" value="100" />
+                <div id="metroBpmText" class="metro__value">100</div>
+              </div>
+              <div class="metro__row">
+                <div class="metro__label">拍号</div>
+                <select id="metroBeats" class="select">
+                  <option value="2">2/4</option>
+                  <option value="3">3/4</option>
+                  <option value="4" selected>4/4</option>
+                  <option value="5">5/4</option>
+                  <option value="6">6/8</option>
+                  <option value="7">7/8</option>
+                  <option value="8">8/8</option>
+                  <option value="9">9/8</option>
+                  <option value="10">10/8</option>
+                  <option value="12">12/8</option>
+                </select>
+                <label class="check">
+                  <input id="metroAccent" type="checkbox" checked />
+                  <span>重音</span>
+                </label>
+                <div id="metroPulse" class="metro__pulse" aria-label="节拍指示"></div>
+              </div>
+              <div class="metro__row">
+                <button id="btnMetroToggle" class="btn btn--primary btn--sm" type="button">开始</button>
+                <button id="btnMetroTap" class="btn btn--ghost btn--sm" type="button">点按测速</button>
+                <button id="btnMetroStop" class="btn btn--ghost btn--sm" type="button">停止</button>
+              </div>
+            </div>
+
+            <div id="scrollControls" class="scrollControls" hidden>
+              <div class="scrollControls__row">
+                <div class="scrollControls__label">速度</div>
+                <input id="scrollSpeed" type="range" min="0" max="12" step="0.25" value="2.5" />
+                <div id="scrollSpeedText" class="scrollControls__value">2.5</div>
+              </div>
+              <div class="scrollControls__row">
+                <button id="btnScrollStop" class="btn btn--ghost btn--sm" type="button">停止</button>
+                <button id="btnScrollTop" class="btn btn--ghost btn--sm" type="button">回到顶部</button>
+                <button id="btnScrollBottom" class="btn btn--ghost btn--sm" type="button">到底部</button>
+              </div>
+            </div>
+
+            <div id="sheet" class="sheet" tabindex="0" aria-label="谱面内容">
+              <pre id="sheetText" class="sheet__text" hidden></pre>
+              <div id="sheetBinary" class="sheet__binary" hidden></div>
+            </div>
+
+            <div class="sectionTitle">页面</div>
+            <div id="pagesEmpty" class="empty">
+              <div class="empty__title">还没有页面</div>
+              <div class="empty__sub">点击“导入页面”选择 2-3 张图片或 PDF</div>
+            </div>
+            <div id="pagesList" class="list" role="list"></div>
+          </div>
+        </section>
+
+        <!-- Practice -->
+        <section id="pagePractice" class="page" data-page="practice" aria-label="训练">
+          <div class="page__scroll">
+            <div class="pageHead">
+              <div class="pageHead__title">每日练习</div>
+              <div class="pageHead__sub">循序渐进提升技能</div>
+            </div>
+
+            <div class="grid2">
+              <div class="card card--accent">
+                <div class="card__kpi">
+                  <div class="kpi__label">连续打卡</div>
+                  <div class="kpi__value">12<span class="kpi__unit">天</span></div>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card__kpi">
+                  <div class="kpi__label">今日经验</div>
+                  <div class="kpi__value">1950</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card__title">每日目标</div>
+              <div class="bar">
+                <div class="bar__fill" style="width: 65%"></div>
+              </div>
+              <div class="muted">还差 1050 XP</div>
+            </div>
+
+            <div class="sectionTitle">快速训练</div>
+            <div class="list">
+              <div class="listCard">
+                <div class="listCard__meta">
+                  <div class="listCard__title">15 分钟热身</div>
+                  <div class="listCard__sub">3 个练习 · 15 分钟 · +180 XP</div>
+                </div>
+                <button class="playBtn" type="button" disabled>▶</button>
+              </div>
+              <div class="listCard">
+                <div class="listCard__meta">
+                  <div class="listCard__title">新手基础</div>
+                  <div class="listCard__sub">4 个练习 · 25 分钟 · +250 XP</div>
+                </div>
+                <button class="playBtn" type="button" disabled>▶</button>
+              </div>
+              <div class="listCard">
+                <div class="listCard__meta">
+                  <div class="listCard__title">速度训练</div>
+                  <div class="listCard__sub">5 个练习 · 30 分钟 · +400 XP</div>
+                </div>
+                <button class="playBtn" type="button" disabled>▶</button>
+              </div>
+            </div>
+            <div class="muted">训练页先做静态占位，后续我们再把节拍器/速度练习/跟练加进去。</div>
+          </div>
+        </section>
+
+        <!-- Me -->
+        <section id="pageMe" class="page" data-page="me" aria-label="我的">
+          <div class="page__scroll">
+            <div class="pageHead">
+              <div class="pageHead__title">个人中心</div>
+              <div class="pageHead__sub">你的吉他之旅</div>
+            </div>
+
+            <div class="card card--accent">
+              <div class="profileHero">
+                <div class="profileHero__left">
+                  <div class="avatar" aria-hidden="true">🎸</div>
+                  <div>
+                    <div class="profileHero__name">吉他学习者</div>
+                    <div class="profileHero__sub">等级 12 · 12450 XP</div>
+                  </div>
+                </div>
+                <button class="gearBtn" type="button" disabled aria-label="设置">⚙</button>
+              </div>
+            </div>
+
+            <div class="grid3">
+              <div class="miniCard">
+                <div class="miniCard__num">12</div>
+                <div class="miniCard__label">连续天数</div>
+              </div>
+              <div class="miniCard">
+                <div class="miniCard__num">23</div>
+                <div class="miniCard__label">学会歌曲</div>
+              </div>
+              <div class="miniCard">
+                <div class="miniCard__num">87</div>
+                <div class="miniCard__label">练习时长</div>
+              </div>
+            </div>
+
+            <div class="sectionTitle sectionTitle--icon">
+              <span class="sectionTitle__icon" aria-hidden="true">🏅</span>
+              最近成就
+            </div>
+            <div class="list">
+              <div class="achievement">
+                <div class="achievement__icon">🏵</div>
+                <div class="achievement__meta">
+                  <div class="achievement__title">每周勇士</div>
+                  <div class="achievement__sub">连续 7 天打卡 · 2 天前</div>
+                </div>
+              </div>
+              <div class="achievement">
+                <div class="achievement__icon">🏵</div>
+                <div class="achievement__meta">
+                  <div class="achievement__title">速度恶魔</div>
+                  <div class="achievement__sub">完成 150 BPM 练习 · 5 天前</div>
+                </div>
+              </div>
+              <div class="achievement">
+                <div class="achievement__icon">🏵</div>
+                <div class="achievement__meta">
+                  <div class="achievement__title">曲目大师</div>
+                  <div class="achievement__sub">学会 20 首歌曲 · 1 周前</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="sectionTitle sectionTitle--icon">
+              <span class="sectionTitle__icon" aria-hidden="true">⚙</span>
+              设置
+            </div>
+            <div class="list">
+              <div class="listItem muted">设置页先占位，后续再补充深色模式、字体、备份等。</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- (Reader merged into Scores Detail) -->
+      </main>
+
+      <nav class="tabbar" aria-label="底部导航">
+        <button class="tab is-active" data-tab="home" type="button" aria-label="首页">
+          <div class="tab__icon">⌂</div>
+          <div class="tab__label">首页</div>
+        </button>
+        <button class="tab" data-tab="scores" type="button" aria-label="曲谱">
+          <div class="tab__icon">𝄞</div>
+          <div class="tab__label">曲谱</div>
+        </button>
+        <button class="tab" data-tab="practice" type="button" aria-label="训练">
+          <div class="tab__icon">≋</div>
+          <div class="tab__label">训练</div>
+        </button>
+        <button class="tab" data-tab="me" type="button" aria-label="我的">
+          <div class="tab__icon">👤</div>
+          <div class="tab__label">我的</div>
+        </button>
+      </nav>
+
+      <dialog id="dialog" class="dialog">
+        <div class="dialog__title" id="dialogTitle">提示</div>
+        <div class="dialog__body" id="dialogBody"></div>
+        <div class="dialog__actions">
+          <button id="dialogClose" class="pill pill--accent" type="button">关闭</button>
+        </div>
+      </dialog>
+    </div>
+
+    <script src="./app.js?v=13" type="module"></script>
+  </body>
+</html>
