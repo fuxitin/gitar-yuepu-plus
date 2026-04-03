@@ -23,6 +23,1175 @@ let currentPage = "home";
 let autoScrollOn = false;
 let autoScrollRaf = 0;
 let autoScrollLastTs = 0;
+let autoScrollCarryPx = 0; // accumulate sub-pixel deltas so low speeds still move
+/** @type {"slow" | "normal" | "fast" | null} */
+let activeScrollPreset = "normal";
+
+// Practice / plans
+const LS_PLANS = "practicePlans_v1";
+/** @type {{ id: string, name: string, items: string[], createdAt: number, updatedAt: number }[]} */
+let plans = [];
+/** @type {{ id: string, name: string, items: string[] } | null} */
+let planDraft = null;
+
+const EXERCISES = [
+  { id: "chromatic", name: "爬格子", desc: "手指独立性练习", level: "初级", minutes: 10, xp: 50 },
+  { id: "chords_basic", name: "基础和弦", desc: "练习 A、C、D、E、G 和弦", level: "初级", minutes: 15, xp: 75 },
+  { id: "pentatonic", name: "五声音阶", desc: "小调五声音阶第一把位", level: "中级", minutes: 12, xp: 100 },
+  { id: "alt_picking", name: "交替拨弦", desc: "速度和精准度训练", level: "中级", minutes: 8, xp: 80 },
+  { id: "chord_changes", name: "和弦转换", desc: "流畅切换和弦", level: "初级", minutes: 10, xp: 60 },
+  { id: "string_skipping", name: "跨弦练习", desc: "高级拨弦技巧", level: "高级", minutes: 15, xp: 150 },
+  { id: "major_scale", name: "大调音阶", desc: "C 大调音阶一把位", level: "中级", minutes: 12, xp: 110 },
+  { id: "rhythm_16", name: "节奏分解", desc: "16 分音符节奏训练", level: "中级", minutes: 10, xp: 90 },
+];
+
+// Tuner state
+const LS_TUNER_MODE = "tunerMode_v1"; // "preset" | "custom"
+const LS_TUNER_PRESET = "tunerPreset_v1";
+const LS_TUNER_CUSTOM = "tunerCustom_v1";
+
+const TUNER_PRESETS = [
+  // Notes order is always: [6th .. 1st]
+  { id: "std", name: "标准调弦", sub: "E-A-D-G-B-E（最常用）", notes: ["E2", "A2", "D3", "G3", "B3", "E4"] },
+  { id: "halfdown", name: "降半音", sub: "Eb-Ab-Db-Gb-Bb-Eb", notes: ["Eb2", "Ab2", "Db3", "Gb3", "Bb3", "Eb4"] },
+  { id: "dropd", name: "Drop D", sub: "第6弦降到D", notes: ["D2", "A2", "D3", "G3", "B3", "E4"] },
+  { id: "dropc", name: "Drop C", sub: "重金属常用", notes: ["C2", "G2", "C3", "F3", "A3", "D4"] },
+  { id: "dadgad", name: "DADGAD", sub: "民谣开放调弦", notes: ["D2", "A2", "D3", "G3", "A3", "D4"] },
+  { id: "openg", name: "Open G", sub: "开放G和弦", notes: ["D2", "G2", "D3", "G3", "B3", "D4"] },
+];
+
+const NOTE_INDEX = (() => {
+  // C2..B4 inclusive
+  const out = [];
+  const names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+  for (let midi = 36; midi <= 71; midi++) {
+    const name = names[(midi + 1200) % 12];
+    const octave = Math.floor(midi / 12) - 1;
+    out.push({ midi, note: `${name}${octave}` });
+  }
+  // Add flats as aliases in parsing only; display uses sharps except preset strings where we keep Eb etc.
+  return out;
+})();
+
+function noteToMidi(note) {
+  const s = String(note || "").trim();
+  const m = /^([A-Ga-g])([#b]?)(-?\d)$/.exec(s);
+  if (!m) return null;
+  const letter = m[1].toUpperCase();
+  const acc = m[2] || "";
+  const oct = Number(m[3]);
+  const base = { C:0, D:2, E:4, F:5, G:7, A:9, B:11 }[letter];
+  if (base == null) return null;
+  const alter = acc === "#" ? 1 : acc === "b" ? -1 : 0;
+  const pc = (base + alter + 12) % 12;
+  const midi = (oct + 1) * 12 + pc;
+  return midi;
+}
+
+function midiToFreq(midi) {
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+function fmtHz(hz) {
+  return `${hz.toFixed(2)} Hz`;
+}
+
+function getTunerMode() {
+  const m = localStorage.getItem(LS_TUNER_MODE);
+  return m === "custom" ? "custom" : "preset";
+}
+
+function setTunerMode(mode) {
+  localStorage.setItem(LS_TUNER_MODE, mode);
+}
+
+function getTunerPresetId() {
+  return localStorage.getItem(LS_TUNER_PRESET) || "std";
+}
+
+function setTunerPresetId(id) {
+  localStorage.setItem(LS_TUNER_PRESET, id);
+}
+
+function getTunerCustomNotes() {
+  try {
+    const raw = localStorage.getItem(LS_TUNER_CUSTOM);
+    const arr = raw ? JSON.parse(raw) : null;
+    if (Array.isArray(arr) && arr.length === 6 && arr.every((x) => typeof x === "string")) return arr;
+  } catch {}
+  return ["E2", "A2", "D3", "G3", "B3", "E4"];
+}
+
+function setTunerCustomNotes(notes) {
+  localStorage.setItem(LS_TUNER_CUSTOM, JSON.stringify(notes));
+}
+
+function getActiveTuning() {
+  const mode = getTunerMode();
+  if (mode === "custom") {
+    return { mode, id: "custom", name: "自定义调弦", sub: "每根弦独立设置", notes: getTunerCustomNotes() };
+  }
+  const id = getTunerPresetId();
+  const p = TUNER_PRESETS.find((x) => x.id === id) || TUNER_PRESETS[0];
+  return { mode, ...p };
+}
+
+let toneCtx = null;
+let toneStopTimer = 0;
+let tonePlayingBtn = null;
+
+function stopTone() {
+  if (toneStopTimer) window.clearTimeout(toneStopTimer);
+  toneStopTimer = 0;
+  if (tonePlayingBtn) tonePlayingBtn.classList.remove("is-playing");
+  tonePlayingBtn = null;
+  if (toneCtx) {
+    try { toneCtx.close(); } catch {}
+  }
+  toneCtx = null;
+}
+
+async function playTone(freq, btnEl) {
+  stopTone();
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  toneCtx = new Ctx();
+  if (toneCtx.state === "suspended") {
+    try { await toneCtx.resume(); } catch {}
+  }
+  const osc = toneCtx.createOscillator();
+  osc.type = "sine";
+  osc.frequency.value = freq;
+  const gain = toneCtx.createGain();
+  gain.gain.value = 0;
+  osc.connect(gain);
+  gain.connect(toneCtx.destination);
+  const now = toneCtx.currentTime;
+  gain.gain.setValueAtTime(0.0, now);
+  gain.gain.linearRampToValueAtTime(0.18, now + 0.03);
+  gain.gain.linearRampToValueAtTime(0.0, now + 2.0);
+  osc.start(now);
+  osc.stop(now + 2.05);
+  tonePlayingBtn = btnEl || null;
+  if (tonePlayingBtn) tonePlayingBtn.classList.add("is-playing");
+  toneStopTimer = window.setTimeout(() => stopTone(), 2100);
+}
+
+// Tuner mic (separate from exercise mic)
+let tunerMicStream = null;
+let tunerMicCtx = null;
+let tunerMicAnalyser = null;
+let tunerMicBuf = null;
+let tunerMicRaf = 0;
+let tunerRecentFreq = [];
+let tunerNoSignalFrames = 0;
+let tunerHoldString = 0; // 6..1
+let tunerHoldStartTs = 0;
+/** @type {Set<number>} */
+let tunerOkStrings = new Set();
+let tunerActiveKey = "";
+const TUNER_MATCH_CENTS = 25; // +/- cents
+const TUNER_MATCH_HOLD_MS = 1000;
+
+function rmsOf(frame) {
+  let s = 0;
+  for (let i = 0; i < frame.length; i++) s += frame[i] * frame[i];
+  return Math.sqrt(s / frame.length);
+}
+
+function tuningKeyFrom(active) {
+  return `${active.mode}:${active.id}:${(active.notes || []).join("|")}`;
+}
+
+function resetTunerMatchState() {
+  tunerHoldString = 0;
+  tunerHoldStartTs = 0;
+  tunerOkStrings = new Set();
+  updateTunerRowsOkUi();
+}
+
+function updateTunerRowsOkUi(activeString = 0) {
+  if (!els.tunerStringList) return;
+  const rows = Array.from(els.tunerStringList.querySelectorAll(".tunerStringRow"));
+  for (const row of rows) {
+    const s = Number(row.getAttribute("data-string") || "0");
+    row.classList.toggle("is-ok", tunerOkStrings.has(s));
+    row.classList.toggle("is-active", s === activeString && !tunerOkStrings.has(s));
+    const badge = row.querySelector(".tunerOkBadge");
+    if (badge) badge.toggleAttribute("hidden", !tunerOkStrings.has(s));
+  }
+}
+
+function closestTuningStringMatch(freq, active) {
+  // active.notes is [6th..1st]
+  let best = null;
+  for (let idx = 0; idx < 6; idx++) {
+    const stringNum = 6 - idx;
+    const n = active.notes[idx];
+    const midi = noteToMidi(n);
+    if (midi == null) continue;
+    const targetHz = midiToFreq(midi);
+    const cents = 1200 * Math.log2(freq / targetHz);
+    const abs = Math.abs(cents);
+    if (!best || abs < best.abs) best = { stringNum, cents, abs };
+  }
+  if (!best || best.abs > TUNER_MATCH_CENTS) return null;
+  return best;
+}
+
+// Autocorrelation fallback (based on the user's demo), tuned for guitar range.
+function detectPitchACF(frame, sampleRate) {
+  const N = Math.min(2048, frame.length);
+  const buf = frame.length === N ? frame : frame.subarray(0, N);
+  const rms = rmsOf(buf);
+  if (rms < 0.0045) return null;
+
+  const MIN_FREQ = 55; // include C2 (65.4Hz) and below
+  const MAX_FREQ = 1000;
+  const minLag = Math.max(2, Math.floor(sampleRate / MAX_FREQ));
+  const maxLag = Math.min(N - 3, Math.floor(sampleRate / MIN_FREQ));
+  if (maxLag <= minLag + 2) return null;
+
+  let energy = 0;
+  for (let i = 0; i < N; i++) energy += buf[i] * buf[i];
+  if (energy <= 1e-9) return null;
+
+  let bestLag = -1;
+  let best = -1;
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    let sum = 0;
+    for (let i = 0; i < N - lag; i++) sum += buf[i] * buf[i + lag];
+    if (sum > best) {
+      best = sum;
+      bestLag = lag;
+    }
+  }
+  if (bestLag < 0) return null;
+
+  // Parabolic interpolation around the best lag
+  const corrAt = (lag) => {
+    let sum = 0;
+    for (let i = 0; i < N - lag; i++) sum += buf[i] * buf[i + lag];
+    return sum;
+  };
+  const c0 = corrAt(Math.max(minLag, bestLag - 1));
+  const c1 = corrAt(bestLag);
+  const c2 = corrAt(Math.min(maxLag, bestLag + 1));
+  const a = (c0 + c2 - 2 * c1) / 2;
+  const b = (c2 - c0) / 2;
+  const shift = a ? -b / (2 * a) : 0;
+  const lag = bestLag + shift;
+
+  const freq = sampleRate / lag;
+  if (!Number.isFinite(freq) || freq < MIN_FREQ || freq > 1500) return null;
+
+  const confidence = Math.max(0, Math.min(1, best / energy));
+  return { freq, confidence };
+}
+
+function freqToNoteAndCents(freq) {
+  const midi = 69 + 12 * Math.log2(freq / 440);
+  const nearest = Math.round(midi);
+  const exact = midiToFreq(nearest);
+  const cents = 1200 * Math.log2(freq / exact);
+  const name = NOTE_NAMES[(nearest + 1200) % 12];
+  const oct = Math.floor(nearest / 12) - 1;
+  return { note: `${name}${oct}`, hz: freq, cents, midi: nearest };
+}
+
+async function startTunerMic() {
+  if (tunerMicRaf) return;
+  try {
+    tunerMicStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    });
+  } catch (e) {
+    showDialog(
+      "无法开启麦克风",
+      `<div class="muted">请允许麦克风权限，并确保用 <code>http://127.0.0.1</code> / <code>http://localhost</code> 打开页面（不要用局域网 IP）。</div>`
+    );
+    throw e;
+  }
+
+  tunerMicCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = tunerMicCtx.createMediaStreamSource(tunerMicStream);
+  const hp = tunerMicCtx.createBiquadFilter();
+  hp.type = "highpass";
+  hp.frequency.value = 35;
+  const lp = tunerMicCtx.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.value = 1500;
+  tunerMicAnalyser = tunerMicCtx.createAnalyser();
+  tunerMicAnalyser.fftSize = 2048;
+  src.connect(hp);
+  hp.connect(lp);
+  lp.connect(tunerMicAnalyser);
+  tunerMicBuf = new Float32Array(tunerMicAnalyser.fftSize);
+  tunerRecentFreq = [];
+  tunerNoSignalFrames = 0;
+  tunerHoldString = 0;
+  tunerHoldStartTs = 0;
+
+  const loop = () => {
+    if (!tunerMicAnalyser || !tunerMicBuf || !tunerMicCtx) return;
+    tunerMicAnalyser.getFloatTimeDomainData(tunerMicBuf);
+
+    // Silence gate: when quiet, avoid jitter and eventually reset the readout.
+    if (rmsOf(tunerMicBuf) < 0.0035) {
+      tunerNoSignalFrames++;
+      if (tunerNoSignalFrames > 12) {
+        tunerRecentFreq = [];
+        if (els.tunerMicNote) els.tunerMicNote.textContent = "--";
+        if (els.tunerMicHz) els.tunerMicHz.textContent = "-- Hz";
+        if (els.tunerMicCents) els.tunerMicCents.textContent = "-- cents";
+        if (els.tunerPointer) els.tunerPointer.style.left = "50%";
+        updateTunerRowsOkUi(0);
+      }
+      tunerMicRaf = requestAnimationFrame(loop);
+      return;
+    }
+    tunerNoSignalFrames = 0;
+
+    /** @type {{freq:number, confidence:number} | null} */
+    let best = detectPitchYIN(tunerMicBuf, tunerMicCtx.sampleRate);
+    if (!best || best.confidence < 0.62) {
+      const acf = detectPitchACF(tunerMicBuf, tunerMicCtx.sampleRate);
+      if (acf && (!best || acf.confidence > best.confidence)) best = acf;
+    }
+
+    if (best && best.confidence > 0.22) {
+      tunerRecentFreq.push(best.freq);
+      if (tunerRecentFreq.length > 7) tunerRecentFreq.shift();
+      const sorted = tunerRecentFreq.slice().sort((a, b) => a - b);
+      const stable = sorted[Math.floor(sorted.length / 2)];
+      const info = freqToNoteAndCents(stable);
+      if (els.tunerMicNote) els.tunerMicNote.textContent = info.note;
+      if (els.tunerMicHz) els.tunerMicHz.textContent = fmtHz(info.hz);
+      if (els.tunerMicCents) els.tunerMicCents.textContent = `${info.cents >= 0 ? "+" : ""}${info.cents.toFixed(0)} cents`;
+      if (els.tunerPointer) {
+        const cents = clamp(info.cents, -50, 50);
+        const pos = 50 + (cents / 50) * 50;
+        els.tunerPointer.style.left = `${pos}%`;
+      }
+
+      // Match against the 6 string targets: if within tolerance for 1s => mark that string as OK.
+      const active = getActiveTuning();
+      const key = tuningKeyFrom(active);
+      if (key !== tunerActiveKey) {
+        tunerActiveKey = key;
+        resetTunerMatchState();
+      }
+      const m = closestTuningStringMatch(stable, active);
+      const now = performance.now();
+      if (!m) {
+        tunerHoldString = 0;
+        tunerHoldStartTs = 0;
+        updateTunerRowsOkUi(0);
+      } else if (tunerOkStrings.has(m.stringNum)) {
+        // Already OK, keep it green but don't require holding.
+        updateTunerRowsOkUi(0);
+      } else {
+        if (tunerHoldString !== m.stringNum) {
+          tunerHoldString = m.stringNum;
+          tunerHoldStartTs = now;
+        } else if (tunerHoldStartTs && (now - tunerHoldStartTs) >= TUNER_MATCH_HOLD_MS) {
+          tunerOkStrings.add(m.stringNum);
+          tunerHoldString = 0;
+          tunerHoldStartTs = 0;
+        }
+        updateTunerRowsOkUi(m.stringNum);
+      }
+    }
+    tunerMicRaf = requestAnimationFrame(loop);
+  };
+  tunerMicRaf = requestAnimationFrame(loop);
+}
+
+function stopTunerMic() {
+  if (tunerMicRaf) cancelAnimationFrame(tunerMicRaf);
+  tunerMicRaf = 0;
+  if (tunerMicStream) {
+    for (const t of tunerMicStream.getTracks()) t.stop();
+  }
+  tunerMicStream = null;
+  if (tunerMicCtx) {
+    try { tunerMicCtx.close(); } catch {}
+  }
+  tunerMicCtx = null;
+  tunerMicAnalyser = null;
+  tunerMicBuf = null;
+  tunerRecentFreq = [];
+  if (els.tunerMicNote) els.tunerMicNote.textContent = "--";
+  if (els.tunerMicHz) els.tunerMicHz.textContent = "-- Hz";
+  if (els.tunerMicCents) els.tunerMicCents.textContent = "-- cents";
+  if (els.tunerPointer) els.tunerPointer.style.left = "50%";
+  updateTunerRowsOkUi(0);
+}
+
+function renderTuner() {
+  const active = getActiveTuning();
+  const key = tuningKeyFrom(active);
+  if (key !== tunerActiveKey) {
+    tunerActiveKey = key;
+    resetTunerMatchState();
+  }
+  if (els.tunerCurrentName) els.tunerCurrentName.textContent = active.name;
+  if (els.tunerCurrentSub) els.tunerCurrentSub.textContent = active.sub;
+
+  if (els.btnTunerMode) els.btnTunerMode.textContent = active.mode === "custom" ? "预设模式" : "自定义模式";
+  if (els.btnTunerPreset) {
+    els.btnTunerPreset.textContent = active.mode === "custom" ? "自定义模式" : "预设模式";
+    els.btnTunerPreset.classList.toggle("pill--accent", active.mode !== "custom");
+  }
+
+  if (els.tunerPresets) {
+    els.tunerPresets.hidden = active.mode === "custom";
+    els.tunerPresets.innerHTML = "";
+    for (const p of TUNER_PRESETS) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "tunerPreset" + (active.mode === "preset" && p.id === active.id ? " is-active" : "");
+      b.innerHTML = `<div class="tunerPreset__title"></div><div class="tunerPreset__sub"></div>`;
+      b.querySelector(".tunerPreset__title").textContent = p.name;
+      b.querySelector(".tunerPreset__sub").textContent = p.sub;
+      b.addEventListener("click", () => {
+        setTunerMode("preset");
+        setTunerPresetId(p.id);
+        renderTuner();
+      });
+      els.tunerPresets.appendChild(b);
+    }
+  }
+
+  if (els.tunerStringList) {
+    els.tunerStringList.innerHTML = "";
+    const notes = active.notes;
+    for (let i = 0; i < 6; i++) {
+      const stringNum = 6 - i;
+      const row = document.createElement("div");
+      row.className = "tunerStringRow";
+      row.setAttribute("data-string", String(stringNum));
+      row.innerHTML = `<div class="tunerStringRow__label"></div><div class="tunerNotePill"></div>`;
+      row.querySelector(".tunerStringRow__label").textContent = `第${stringNum}弦`;
+
+      const pill = /** @type {HTMLElement} */ (row.querySelector(".tunerNotePill"));
+      // notes are stored as [6th..1st]
+      const noteIdx = 6 - stringNum; // 0..5
+      const n = notes[noteIdx] || "E2";
+      const midi = noteToMidi(n);
+      const hz = midi == null ? 0 : midiToFreq(midi);
+
+      if (active.mode === "custom") {
+        const sel = document.createElement("select");
+        sel.className = "tunerSelect";
+        for (const it of NOTE_INDEX) {
+          const opt = document.createElement("option");
+          opt.value = it.note;
+          opt.textContent = it.note;
+          if (it.note === n) opt.selected = true;
+          sel.appendChild(opt);
+        }
+        sel.addEventListener("change", () => {
+          const curr = getTunerCustomNotes();
+          curr[noteIdx] = sel.value;
+          setTunerCustomNotes(curr);
+          renderTuner();
+        });
+        const left = document.createElement("div");
+        left.style.display = "flex";
+        left.style.flexDirection = "column";
+        left.style.gap = "2px";
+        const hzEl = document.createElement("div");
+        hzEl.className = "tunerNotePill__hz";
+        hzEl.textContent = fmtHz(hz);
+        left.appendChild(sel);
+        left.appendChild(hzEl);
+        pill.appendChild(left);
+      } else {
+        const noteEl = document.createElement("div");
+        noteEl.className = "tunerNotePill__note";
+        noteEl.textContent = n;
+        const right = document.createElement("div");
+        right.className = "tunerNotePill__right";
+        const hzEl = document.createElement("div");
+        hzEl.className = "tunerNotePill__hz";
+        hzEl.textContent = fmtHz(hz);
+        const ok = document.createElement("div");
+        ok.className = "tunerOkBadge";
+        ok.textContent = "已就绪";
+        ok.hidden = !tunerOkStrings.has(stringNum);
+        right.appendChild(hzEl);
+        right.appendChild(ok);
+        pill.appendChild(noteEl);
+        pill.appendChild(right);
+      }
+
+      const btn = document.createElement("button");
+      btn.className = "toneBtn";
+      btn.type = "button";
+      btn.textContent = "播放";
+      btn.addEventListener("click", async () => {
+        try {
+          await playTone(hz, btn);
+        } catch {
+          stopTone();
+        }
+      });
+      row.appendChild(btn);
+
+      els.tunerStringList.appendChild(row);
+    }
+    updateTunerRowsOkUi(0);
+  }
+}
+
+// Exercise (training detail) state
+/** @type {{ id: string, key: string, bpm: number } | null} */
+let activeExercise = null;
+
+// Mic / pitch detection state (exercise page)
+/** @type {MediaStream | null} */
+let micStream = null;
+/** @type {AudioContext | null} */
+let micCtx = null;
+/** @type {AnalyserNode | null} */
+let micAnalyser = null;
+/** @type {Float32Array | null} */
+let micBuf = null;
+let micRaf = 0;
+let lastHitTs = 0;
+/** @type {number[]} */
+let recentMidis = []; // legacy, kept for compatibility
+/** @type {number[]} */
+let recentFreqs = [];
+let exHoldMidi = 0;
+let exHoldStartTs = 0;
+const EX_MATCH_CENTS = 35; // +/- cents
+const EX_MATCH_HOLD_MS = 240;
+
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+function noteNameFromMidi(midi) {
+  const name = NOTE_NAMES[(midi + 1200) % 12];
+  const octave = Math.floor(midi / 12) - 1;
+  return { name, octave };
+}
+
+function freqToMidi(freq) {
+  return Math.round(69 + 12 * Math.log2(freq / 440));
+}
+
+function detectPitchYIN(frame, sampleRate) {
+  // Monophonic pitch detection; better stability than naive autocorrelation for guitar single notes.
+  const SIZE = frame.length;
+  let rms = 0;
+  for (let i = 0; i < SIZE; i++) rms += frame[i] * frame[i];
+  rms = Math.sqrt(rms / SIZE);
+  if (rms < 0.006) return null;
+
+  const maxTau = Math.floor(sampleRate / 55); // include low guitar notes (C2=65Hz)
+  const minTau = Math.floor(sampleRate / 1400); // ~1400Hz
+  const tauMax = Math.min(maxTau, Math.floor(SIZE / 2));
+  if (tauMax <= minTau + 2) return null;
+
+  const d = new Float32Array(tauMax + 1);
+  const cmnd = new Float32Array(tauMax + 1);
+
+  for (let tau = 1; tau <= tauMax; tau++) {
+    let sum = 0;
+    for (let i = 0; i < tauMax; i++) {
+      const x = frame[i] - frame[i + tau];
+      sum += x * x;
+    }
+    d[tau] = sum;
+  }
+
+  cmnd[0] = 1;
+  let running = 0;
+  for (let tau = 1; tau <= tauMax; tau++) {
+    running += d[tau];
+    cmnd[tau] = d[tau] * tau / (running || 1);
+  }
+
+  const threshold = 0.12;
+  let tau = -1;
+  for (let t = minTau; t < tauMax; t++) {
+    if (cmnd[t] < threshold) {
+      while (t + 1 < tauMax && cmnd[t + 1] < cmnd[t]) t++;
+      tau = t;
+      break;
+    }
+  }
+  if (tau === -1) return null;
+
+  // Parabolic interpolation
+  const x0 = Math.max(1, tau - 1);
+  const x2 = Math.min(tauMax - 1, tau + 1);
+  const s0 = cmnd[x0], s1 = cmnd[tau], s2 = cmnd[x2];
+  const a = (s0 + s2 - 2 * s1) / 2;
+  const b = (s2 - s0) / 2;
+  const shift = a ? -b / (2 * a) : 0;
+  const betterTau = tau + shift;
+  const freq = sampleRate / betterTau;
+  if (!Number.isFinite(freq) || freq < 55 || freq > 1400) return null;
+  return { freq, confidence: 1 - cmnd[tau] };
+}
+
+function keyToFretOnLowE(key) {
+  // Natural keys only for now (per design)
+  const map = { E: 0, F: 1, G: 3, A: 5, B: 7, C: 8, D: 10 };
+  return map[key] ?? 0;
+}
+
+function majorScalePitchClasses(key) {
+  // relative to root: 0,2,4,5,7,9,11
+  const rootPc = NOTE_NAMES.indexOf(key);
+  const pcs = [0, 2, 4, 5, 7, 9, 11].map((d) => (rootPc + d + 12) % 12);
+  return new Set(pcs);
+}
+
+function solfegeForPc(rootPc, pc) {
+  const steps = [0, 2, 4, 5, 7, 9, 11];
+  const names = ["do", "re", "mi", "fa", "sol", "la", "ti"];
+  const diff = (pc - rootPc + 12) % 12;
+  const idx = steps.indexOf(diff);
+  return idx >= 0 ? names[idx] : null;
+}
+
+function recommendedFretRangeForKey(key) {
+  const rootPc = NOTE_NAMES.indexOf(key);
+  /** @type {number[]} */
+  const roots = [];
+  for (const s of [6, 5, 4, 3, 2, 1]) {
+    const open = getOpenStringMidi(s);
+    for (let fret = 0; fret <= 12; fret++) {
+      const pc = (open + fret + 1200) % 12;
+      if (pc === rootPc) roots.push(fret);
+    }
+  }
+  const min = roots.length ? Math.min(...roots) : 0;
+  const start = clamp(min - 1, 0, 12);
+  const end = clamp(start + 5, 5, 15);
+  return { start, end };
+}
+
+function getOpenStringMidi(stringNum) {
+  // 6..1 -> E2 A2 D3 G3 B3 E4
+  const map = { 6: 40, 5: 45, 4: 50, 3: 55, 2: 59, 1: 64 };
+  return map[stringNum] ?? 40;
+}
+
+function renderExercisePage(exId) {
+  const ex = EXERCISES.find((x) => x.id === exId);
+  if (!ex) return;
+  const savedBpm = clamp(Number(localStorage.getItem("exMetroBpm") || "80"), 40, 240);
+  const savedBeats = clamp(Number(localStorage.getItem("exMetroBeats") || "4"), 1, 12);
+  const savedAccent = (localStorage.getItem("exMetroAccent") || "1") === "1";
+
+  activeExercise = { id: exId, key: "B", bpm: savedBpm };
+  exMetro.setTempo(savedBpm);
+  exMetro.setBeatsPerBar(savedBeats);
+  exMetro.setAccent(savedAccent);
+  if (els.exerciseTitle) els.exerciseTitle.textContent = ex.name;
+  if (els.exerciseSub) els.exerciseSub.textContent = ex.desc;
+  if (els.exerciseXp) els.exerciseXp.textContent = `+${ex.xp}`;
+
+  if (els.exerciseBpmText) els.exerciseBpmText.textContent = String(activeExercise.bpm);
+  if (els.exMetroBpm) els.exMetroBpm.value = String(activeExercise.bpm);
+  if (els.exMetroBpmText) els.exMetroBpmText.textContent = String(activeExercise.bpm);
+  if (els.exMetroBeats) els.exMetroBeats.value = String(savedBeats);
+  if (els.exMetroAccent) els.exMetroAccent.checked = savedAccent;
+
+  // Per-exercise sections
+  if (els.exerciseKeyCard) els.exerciseKeyCard.hidden = exId === "chromatic";
+  if (els.exerciseKeys) els.exerciseKeys.hidden = exId === "chromatic";
+  if (els.exerciseBullets) {
+    const bullets =
+      exId === "chromatic"
+        ? [
+            "从第 1 品开始，按 1-2-3-4 指法依次弹奏（也可从第 5 品开始更舒服）",
+            "每根弦上行后再下行，注意换弦时保持节奏均匀",
+            "尽量做到每个音发声清晰、力度一致",
+          ]
+        : [
+            "找到当前调的 do（根音）位置，记住指板分布",
+            "上行和下行都要练习，尽量按节拍弹奏",
+            "保持节奏均匀，音要干净",
+          ];
+    els.exerciseBullets.innerHTML = bullets.map((t) => `<li>${t}</li>`).join("");
+  }
+
+  if (exId !== "chromatic") renderExerciseKeys();
+  renderFretboard();
+  updateMicStatus(false);
+  setExMetronomeUiOpen(true);
+  setExMetronomeRunningUi(exMetro.isRunning);
+}
+
+function renderExerciseKeys() {
+  if (!els.exerciseKeys || !activeExercise) return;
+  const keys = ["C", "D", "E", "F", "G", "A", "B"];
+  els.exerciseKeys.innerHTML = "";
+  for (const k of keys) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "exKeyBtn" + (k === activeExercise.key ? " is-active" : "");
+    btn.textContent = `${k}调`;
+    btn.addEventListener("click", () => {
+      if (!activeExercise) return;
+      activeExercise.key = k;
+      renderExerciseKeys();
+      renderFretboard();
+    });
+    els.exerciseKeys.appendChild(btn);
+  }
+}
+
+function renderFretboard() {
+  if (!els.fretboard || !activeExercise) return;
+  if (activeExercise.id === "chromatic") return renderFretboardChromatic();
+  return renderFretboardMajorScale();
+}
+
+function createFretboardBase(range) {
+  // Lying guitar: rows are strings (1..6), columns are frets (1..15).
+  const fb = document.createElement("div");
+  fb.className = "fbH";
+
+  // Continuous fret wires overlay (not broken per-cell).
+  const fretsOverlay = document.createElement("div");
+  fretsOverlay.className = "fbH__frets";
+  for (let fret = 1; fret <= 15; fret++) {
+    const w = document.createElement("div");
+    w.className = "fbH__fretWire";
+    w.style.gridColumn = String(fret + 1);
+    fretsOverlay.appendChild(w);
+  }
+  fb.appendChild(fretsOverlay);
+
+  const header = document.createElement("div");
+  header.className = "fbH__hdr";
+  const corner = document.createElement("div");
+  corner.className = "fbH__corner";
+  corner.textContent = "";
+  header.appendChild(corner);
+  for (let fret = 1; fret <= 15; fret++) {
+    const h = document.createElement("div");
+    h.className = "fbH__fretNum" + (fret >= range.start && fret <= range.end ? " is-inRange" : "");
+    h.textContent = String(fret);
+    header.appendChild(h);
+  }
+  fb.appendChild(header);
+
+  return fb;
+}
+
+function renderFretboardMajorScale() {
+  if (!els.fretboard || !activeExercise) return;
+  const key = activeExercise.key;
+  const rootPc = NOTE_NAMES.indexOf(key);
+  const scalePcs = majorScalePitchClasses(key);
+  const range = recommendedFretRangeForKey(key);
+  els.fretboard.innerHTML = "";
+
+  const fb = createFretboardBase(range);
+
+  for (const s of [1, 2, 3, 4, 5, 6]) {
+    const row = document.createElement("div");
+    row.className = "fbH__row";
+    const sl = document.createElement("div");
+    sl.className = "fbH__sLabel";
+    sl.textContent = String(s);
+    row.appendChild(sl);
+
+    for (let fret = 1; fret <= 15; fret++) {
+      const cell = document.createElement("div");
+      cell.className = "fbH__cell" + (fret >= range.start && fret <= range.end ? " is-inRange" : "");
+
+      const midi = getOpenStringMidi(s) + fret;
+      const pc = (midi + 1200) % 12;
+      const sol = solfegeForPc(rootPc, pc);
+      const isScale = scalePcs.has(pc);
+
+      if (isScale && sol) {
+        const tag = document.createElement("div");
+        tag.className = "fbH__tag";
+        tag.textContent = sol;
+        cell.appendChild(tag);
+      }
+
+      const dot = document.createElement("div");
+      dot.className = "fbH__dot";
+      dot.dataset.string = String(s);
+      dot.dataset.fret = String(fret);
+      dot.dataset.midi = String(midi);
+      if (isScale) dot.classList.add("is-note");
+      if (isScale && pc === rootPc) dot.classList.add("is-root");
+      cell.appendChild(dot);
+      row.appendChild(cell);
+    }
+    fb.appendChild(row);
+  }
+
+  els.fretboard.appendChild(fb);
+  if (els.fretWrap) {
+    const approxCellW = 42;
+    els.fretWrap.scrollLeft = Math.max(0, (range.start - 1) * approxCellW);
+  }
+}
+
+function renderFretboardChromatic() {
+  if (!els.fretboard || !activeExercise) return;
+  // Default: show 1-2-3-4 finger pattern on frets 1..4 across all strings.
+  const range = { start: 1, end: 4 };
+  els.fretboard.innerHTML = "";
+
+  const fb = createFretboardBase(range);
+
+  for (const s of [1, 2, 3, 4, 5, 6]) {
+    const row = document.createElement("div");
+    row.className = "fbH__row";
+    const sl = document.createElement("div");
+    sl.className = "fbH__sLabel";
+    sl.textContent = String(s);
+    row.appendChild(sl);
+
+    for (let fret = 1; fret <= 15; fret++) {
+      const cell = document.createElement("div");
+      cell.className = "fbH__cell" + (fret >= range.start && fret <= range.end ? " is-inRange" : "");
+
+      const dot = document.createElement("div");
+      dot.className = "fbH__dot";
+      const midi = getOpenStringMidi(s) + fret;
+      dot.dataset.string = String(s);
+      dot.dataset.fret = String(fret);
+      dot.dataset.midi = String(midi);
+
+      if (fret >= 1 && fret <= 4) {
+        dot.classList.add("is-note");
+        const tag = document.createElement("div");
+        tag.className = "fbH__tag fbH__tag--finger";
+        tag.textContent = String(fret); // finger 1..4
+        cell.appendChild(tag);
+      }
+
+      cell.appendChild(dot);
+      row.appendChild(cell);
+    }
+    fb.appendChild(row);
+  }
+
+  els.fretboard.appendChild(fb);
+  if (els.fretWrap) els.fretWrap.scrollLeft = 0;
+}
+
+function flashDotsForMidi(midi) {
+  if (!els.fretboard) return false;
+  const all = Array.from(els.fretboard.querySelectorAll(".fbH__dot.is-note"));
+  /** @type {HTMLElement[]} */
+  let targets = all.filter((d) => Number(d.getAttribute("data-midi") || "0") === midi);
+  if (targets.length === 0) targets = all.filter((d) => (Number(d.getAttribute("data-midi") || "0") % 12) === (midi % 12));
+  for (const d of targets) {
+    d.classList.add("is-hit");
+    window.setTimeout(() => d.classList.remove("is-hit"), 160);
+  }
+  return targets.length > 0;
+}
+
+function updateMicStatus(on) {
+  if (els.micStatus) els.micStatus.textContent = on ? "麦克风：监听中" : "麦克风：未开启";
+  if (els.btnMicToggle) els.btnMicToggle.classList.toggle("navPill--accent", !!on);
+}
+
+async function startMic() {
+  if (micRaf) return;
+  micStream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+  });
+  micCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = micCtx.createMediaStreamSource(micStream);
+  // Light filtering helps reduce low-frequency rumble and high-frequency hiss.
+  const hp = micCtx.createBiquadFilter();
+  hp.type = "highpass";
+  hp.frequency.value = 35;
+  const lp = micCtx.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.value = 1500;
+  micAnalyser = micCtx.createAnalyser();
+  micAnalyser.fftSize = 2048;
+  src.connect(hp);
+  hp.connect(lp);
+  lp.connect(micAnalyser);
+  micBuf = new Float32Array(micAnalyser.fftSize);
+  updateMicStatus(true);
+  recentMidis = [];
+  recentFreqs = [];
+  exHoldMidi = 0;
+  exHoldStartTs = 0;
+
+  const loop = () => {
+    if (!micAnalyser || !micBuf || !micCtx) return;
+    micAnalyser.getFloatTimeDomainData(micBuf);
+
+    /** @type {{freq:number, confidence:number} | null} */
+    let best = detectPitchYIN(micBuf, micCtx.sampleRate);
+    if (!best || best.confidence < 0.62) {
+      const acf = detectPitchACF(micBuf, micCtx.sampleRate);
+      if (acf && (!best || acf.confidence > best.confidence)) best = acf;
+    }
+
+    if (best && activeExercise && best.confidence > 0.22) {
+      recentFreqs.push(best.freq);
+      if (recentFreqs.length > 7) recentFreqs.shift();
+      const sortedF = recentFreqs.slice().sort((a, b) => a - b);
+      const stableFreq = sortedF[Math.floor(sortedF.length / 2)];
+      const info = freqToNoteAndCents(stableFreq);
+      if (Math.abs(info.cents) > EX_MATCH_CENTS) {
+        exHoldMidi = 0;
+        exHoldStartTs = 0;
+        micRaf = requestAnimationFrame(loop);
+        return;
+      }
+
+      const now = performance.now();
+      if (exHoldMidi !== info.midi) {
+        exHoldMidi = info.midi;
+        exHoldStartTs = now;
+      }
+      const heldOk = exHoldStartTs && (now - exHoldStartTs) >= EX_MATCH_HOLD_MS;
+
+      if (heldOk && now - lastHitTs > 120) {
+        if (activeExercise.id === "chromatic") {
+          if (flashDotsForMidi(info.midi)) lastHitTs = now;
+        } else {
+          const pcs = majorScalePitchClasses(activeExercise.key);
+          const pc = (info.midi + 1200) % 12;
+          if (pcs.has(pc)) {
+            lastHitTs = now;
+            flashDotsForMidi(info.midi);
+          }
+        }
+      }
+    } else {
+      exHoldMidi = 0;
+      exHoldStartTs = 0;
+    }
+    micRaf = requestAnimationFrame(loop);
+  };
+  micRaf = requestAnimationFrame(loop);
+}
+
+function stopMic() {
+  if (micRaf) cancelAnimationFrame(micRaf);
+  micRaf = 0;
+  if (micStream) {
+    for (const t of micStream.getTracks()) t.stop();
+  }
+  micStream = null;
+  if (micCtx) {
+    try { micCtx.close(); } catch {}
+  }
+  micCtx = null;
+  micAnalyser = null;
+  micBuf = null;
+  recentMidis = [];
+  recentFreqs = [];
+  exHoldMidi = 0;
+  exHoldStartTs = 0;
+  updateMicStatus(false);
+}
+
+function levelBadgeClass(level) {
+  if (level === "初级") return "badge badge--easy";
+  if (level === "中级") return "badge badge--mid";
+  return "badge badge--hard";
+}
+
+function loadPlans() {
+  try {
+    const raw = localStorage.getItem(LS_PLANS) || "[]";
+    const arr = JSON.parse(raw);
+    plans = Array.isArray(arr) ? arr : [];
+  } catch {
+    plans = [];
+  }
+}
+
+function savePlans() {
+  localStorage.setItem(LS_PLANS, JSON.stringify(plans));
+}
+
+function planTotals(items) {
+  let minutes = 0;
+  let xp = 0;
+  for (const id of items || []) {
+    const ex = EXERCISES.find((x) => x.id === id);
+    if (!ex) continue;
+    minutes += ex.minutes || 0;
+    xp += ex.xp || 0;
+  }
+  return { minutes, xp, count: (items || []).length };
+}
+
+function renderPractice() {
+  renderQuickPlans();
+  renderExercises();
+}
+
+function renderQuickPlans() {
+  if (!els.quickPlanList) return;
+  els.quickPlanList.innerHTML = "";
+
+  const builtIn = [
+    { id: "builtin_warmup", title: "15 分钟热身", sub: "3 个练习 · 15 分钟 · +180 XP" },
+    { id: "builtin_basic", title: "新手基础", sub: "4 个练习 · 25 分钟 · +250 XP" },
+    { id: "builtin_speed", title: "速度训练", sub: "5 个练习 · 30 分钟 · +400 XP" },
+  ];
+
+  for (const p of builtIn) {
+    const card = document.createElement("div");
+    card.className = "listCard";
+    card.innerHTML = `<div class="listCard__meta"><div class="listCard__title"></div><div class="listCard__sub"></div></div>`;
+    card.querySelector(".listCard__title").textContent = p.title;
+    card.querySelector(".listCard__sub").textContent = p.sub;
+    const btn = document.createElement("button");
+    btn.className = "playBtn";
+    btn.type = "button";
+    btn.textContent = "▶";
+    btn.addEventListener("click", () => {
+      showDialog("开始训练", "该训练为占位示例，后续会接入计时/节拍器/跟练。", { showClose: true });
+    });
+    card.appendChild(btn);
+    els.quickPlanList.appendChild(card);
+  }
+
+  for (const pl of plans.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))) {
+    const totals = planTotals(pl.items || []);
+    const card = document.createElement("div");
+    card.className = "listCard";
+    card.innerHTML = `<div class="listCard__meta"><div class="listCard__title"></div><div class="listCard__sub"></div></div>`;
+    card.querySelector(".listCard__title").textContent = pl.name || "自定义训练";
+    card.querySelector(".listCard__sub").textContent = `${totals.count} 个练习 · ${totals.minutes} 分钟 · +${totals.xp} XP`;
+    const btn = document.createElement("button");
+    btn.className = "playBtn";
+    btn.type = "button";
+    btn.textContent = "▶";
+    btn.addEventListener("click", () => {
+      showDialog("开始训练", `“${pl.name}” 已保存（当前为占位开始）。`, { showClose: true });
+    });
+    card.appendChild(btn);
+    els.quickPlanList.appendChild(card);
+  }
+}
+
+function renderExercises() {
+  if (!els.exerciseList) return;
+  els.exerciseList.innerHTML = "";
+
+  for (const ex of EXERCISES) {
+    const row = document.createElement("div");
+    row.className = "exerciseRow";
+    row.innerHTML = `
+      <div class="exerciseRow__icon">▶</div>
+      <div class="exerciseRow__main">
+        <div class="exerciseRow__title"></div>
+        <div class="exerciseRow__desc"></div>
+        <div class="exerciseRow__meta">
+          <span class="${levelBadgeClass(ex.level)}">${ex.level}</span>
+          <span>🕒 ${ex.minutes} 分钟</span>
+          <span>⚡ +${ex.xp} XP</span>
+        </div>
+      </div>
+    `;
+    row.querySelector(".exerciseRow__title").textContent = ex.name;
+    row.querySelector(".exerciseRow__desc").textContent = ex.desc;
+    const start = document.createElement("button");
+    start.className = "startBtn";
+    start.type = "button";
+    start.textContent = "开始";
+    start.addEventListener("click", () => {
+      if (ex.id === "pentatonic" || ex.id === "chromatic") {
+        setPage("exercise");
+        renderExercisePage(ex.id);
+        return;
+      }
+      showDialog("开始练习", `${ex.name}<br/>${ex.desc}<br/><br/>该练习将作为基础训练项供自定义训练计划搭配（后续可接计时/节拍器/音高识别）。`, { showClose: true });
+    });
+    row.appendChild(start);
+    els.exerciseList.appendChild(row);
+  }
+}
+
+function openPlanBuilder() {
+  planDraft = { id: id(), name: "我的自定义训练", items: [] };
+  if (els.planNameInput) els.planNameInput.value = planDraft.name;
+  if (els.planSearch) els.planSearch.value = "";
+  setPage("plan");
+  renderPlanBuilder();
+}
+
+function renderPlanBuilder() {
+  if (!planDraft) return;
+  const totals = planTotals(planDraft.items);
+  if (els.planSummaryText) els.planSummaryText.textContent = `${totals.count} 个练习 · 总计 ${totals.minutes} 分钟`;
+
+  const has = totals.count > 0;
+  if (els.planSelectedEmpty) els.planSelectedEmpty.hidden = has;
+  if (els.planSelectedList) els.planSelectedList.hidden = !has;
+
+  if (els.planSelectedList) {
+    els.planSelectedList.innerHTML = "";
+    for (const exId of planDraft.items) {
+      const ex = EXERCISES.find((x) => x.id === exId);
+      if (!ex) continue;
+      const row = document.createElement("div");
+      row.className = "addRow";
+      row.innerHTML = `<div><div class="addRow__title"></div><div class="addRow__sub"></div><div class="addRow__meta"></div></div>`;
+      row.querySelector(".addRow__title").textContent = ex.name;
+      row.querySelector(".addRow__sub").textContent = ex.desc;
+      row.querySelector(".addRow__meta").textContent = `🕒 ${ex.minutes} 分钟`;
+      const btn = document.createElement("button");
+      btn.className = "addBtn";
+      btn.type = "button";
+      btn.textContent = "－";
+      btn.addEventListener("click", () => {
+        planDraft.items = planDraft.items.filter((x) => x !== exId);
+        renderPlanBuilder();
+      });
+      row.appendChild(btn);
+      els.planSelectedList.appendChild(row);
+    }
+  }
+
+  const q = (els.planSearch && els.planSearch.value || "").trim().toLowerCase();
+  const list = EXERCISES.filter((ex) => {
+    if (!q) return true;
+    return (ex.name + " " + ex.desc).toLowerCase().includes(q);
+  });
+
+  if (els.planAddList) {
+    els.planAddList.innerHTML = "";
+    for (const ex of list) {
+      const row = document.createElement("div");
+      row.className = "addRow";
+      row.innerHTML = `<div><div class="addRow__title"></div><div class="addRow__sub"></div><div class="addRow__meta"></div></div>`;
+      row.querySelector(".addRow__title").textContent = ex.name;
+      row.querySelector(".addRow__sub").textContent = ex.desc;
+      row.querySelector(".addRow__meta").textContent = `🕒 ${ex.minutes} 分钟`;
+      const btn = document.createElement("button");
+      btn.className = "addBtn";
+      btn.type = "button";
+      btn.textContent = "＋";
+      btn.disabled = planDraft.items.includes(ex.id);
+      btn.addEventListener("click", () => {
+        if (!planDraft) return;
+        if (!planDraft.items.includes(ex.id)) planDraft.items.push(ex.id);
+        renderPlanBuilder();
+      });
+      row.appendChild(btn);
+      els.planAddList.appendChild(row);
+    }
+  }
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -32,8 +1201,21 @@ function on(el, type, handler, options) {
 }
 
 function getDetailScrollEl() {
-  // Detail page uses the page scroll container (single scroll). Fallback to sheet.
-  return /** @type {HTMLElement} */ (els.scoreDetailScroll || els.sheet || document.documentElement);
+  // Prefer the dedicated detail scroller. If layout changes and it stops scrolling,
+  // fall back to the real scrolling element (some browsers/layouts scroll the document).
+  /** @type {HTMLElement[]} */
+  const candidates = [];
+  if (els.scoreDetailScroll) candidates.push(/** @type {HTMLElement} */ (els.scoreDetailScroll));
+  if (els.sheet) candidates.push(/** @type {HTMLElement} */ (els.sheet));
+  if (document.scrollingElement) candidates.push(/** @type {HTMLElement} */ (document.scrollingElement));
+  candidates.push(document.documentElement);
+  candidates.push(document.body);
+
+  for (const el of candidates) {
+    if (!el) continue;
+    if (el.scrollHeight - el.clientHeight > 2) return el;
+  }
+  return /** @type {HTMLElement} */ (candidates.find(Boolean) || document.documentElement);
 }
 
 const els = {
@@ -42,6 +1224,7 @@ const els = {
   pageScores: $("pageScores"),
   pageScoreDetail: $("pageScoreDetail"),
   pagePractice: $("pagePractice"),
+  pagePlan: $("pagePlan"),
   pageMe: $("pageMe"),
   tabButtons: Array.from(document.querySelectorAll(".tab")),
 
@@ -78,6 +1261,9 @@ const els = {
 
   btnAutoScroll: $("btnAutoScroll"),
   scrollControls: $("scrollControls"),
+  scrollPresetSlow: $("scrollPresetSlow"),
+  scrollPresetNormal: $("scrollPresetNormal"),
+  scrollPresetFast: $("scrollPresetFast"),
   scrollSpeed: /** @type {HTMLInputElement} */ ($("scrollSpeed")),
   scrollSpeedText: $("scrollSpeedText"),
   btnScrollStop: $("btnScrollStop"),
@@ -103,6 +1289,64 @@ const els = {
   dialogTitle: $("dialogTitle"),
   dialogBody: $("dialogBody"),
   dialogClose: $("dialogClose"),
+
+  // Practice
+  btnPracticeCustomize: $("btnPracticeCustomize"),
+  quickPlanList: $("quickPlanList"),
+  exerciseList: $("exerciseList"),
+
+  // Plan builder
+  btnPlanBack: $("btnPlanBack"),
+  btnPlanSave: $("btnPlanSave"),
+  planNameInput: /** @type {HTMLInputElement} */ ($("planNameInput")),
+  planSummaryText: $("planSummaryText"),
+  planSelectedEmpty: $("planSelectedEmpty"),
+  planSelectedList: $("planSelectedList"),
+  planSearch: /** @type {HTMLInputElement} */ ($("planSearch")),
+  planAddList: $("planAddList"),
+
+  // Exercise
+  btnExerciseBack: $("btnExerciseBack"),
+  exerciseTitle: $("exerciseTitle"),
+  exerciseSub: $("exerciseSub"),
+  exerciseXp: $("exerciseXp"),
+  exerciseStep: $("exerciseStep"),
+  exercisePct: $("exercisePct"),
+  exerciseBar: $("exerciseBar"),
+  exerciseBpmText: $("exerciseBpmText"),
+  exerciseKeys: $("exerciseKeys"),
+  exerciseKeyCard: $("exerciseKeyCard"),
+  exerciseBullets: $("exerciseBullets"),
+  fretWrap: $("fretWrap"),
+  fretboard: $("fretboard"),
+  micStatus: $("micStatus"),
+  btnMicToggle: $("btnMicToggle"),
+  exBtnMetronome: $("exBtnMetronome"),
+  exMetronomeControls: $("exMetronomeControls"),
+  exMetroBpm: /** @type {HTMLInputElement} */ ($("exMetroBpm")),
+  exMetroBpmText: $("exMetroBpmText"),
+  exMetroBeats: /** @type {HTMLSelectElement} */ ($("exMetroBeats")),
+  exMetroAccent: /** @type {HTMLInputElement} */ ($("exMetroAccent")),
+  exMetroPulse: $("exMetroPulse"),
+  exBtnMetroToggle: $("exBtnMetroToggle"),
+  exBtnMetroTap: $("exBtnMetroTap"),
+  exBtnMetroStop: $("exBtnMetroStop"),
+
+  // Tuner
+  pageTuner: $("pageTuner"),
+  btnOpenTuner: $("btnOpenTuner"),
+  btnTunerBack: $("btnTunerBack"),
+  btnTunerMode: $("btnTunerMode"),
+  btnTunerPreset: $("btnTunerPreset"),
+  tunerPresets: $("tunerPresets"),
+  tunerCurrentName: $("tunerCurrentName"),
+  tunerCurrentSub: $("tunerCurrentSub"),
+  tunerStringList: $("tunerStringList"),
+  btnTunerMic: $("btnTunerMic"),
+  tunerMicNote: $("tunerMicNote"),
+  tunerMicHz: $("tunerMicHz"),
+  tunerMicCents: $("tunerMicCents"),
+  tunerPointer: $("tunerPointer"),
 };
 
 function showDialog(title, bodyHtml, opts = {}) {
@@ -469,8 +1713,9 @@ function renderScores() {
 }
 
 function setPage(page) {
+  const prev = currentPage;
   currentPage = page;
-  const pages = ["home", "scores", "score", "practice", "me"];
+  const pages = ["home", "scores", "score", "practice", "plan", "exercise", "me", "tuner"];
   for (const p of pages) {
     const el = document.querySelector(`[data-page="${p}"]`);
     if (!el) continue;
@@ -479,11 +1724,32 @@ function setPage(page) {
 
   for (const btn of els.tabButtons) {
     const t = btn.getAttribute("data-tab");
-    const tabActive = (page === "score" && t === "scores") || t === page;
+    const tabActive =
+      (page === "score" && t === "scores") ||
+      (page === "plan" && t === "practice") ||
+      (page === "exercise" && t === "practice") ||
+      (page === "tuner" && t === "me") ||
+      t === page;
     btn.classList.toggle("is-active", tabActive);
   }
 
   // Tab bar always visible (reader is inside Scores tab now).
+
+  // Lightweight render hooks for non-tab subpages.
+  if (page === "practice") renderPractice();
+  if (page === "plan") renderPlanBuilder();
+  if (page === "tuner") renderTuner();
+
+  // Leaving exercise: stop mic & metronome to avoid background audio.
+  if (prev === "exercise" && page !== "exercise") {
+    stopMic();
+    stopExerciseMetronome();
+  }
+
+  if (prev === "tuner" && page !== "tuner") {
+    stopTone();
+    stopTunerMic();
+  }
 }
 
 async function refreshLibrary() {
@@ -692,16 +1958,86 @@ async function addPagesToSong(songId, fileList) {
 
 function setAutoScroll(on) {
   autoScrollOn = on;
-  els.btnAutoScroll.textContent = on ? "自动滚动中" : "自动滚动";
-  els.scrollControls.hidden = !on;
+  if (els.btnAutoScroll) {
+    els.btnAutoScroll.textContent = on ? "自动滚动中" : "自动滚动";
+    els.btnAutoScroll.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+  if (els.scrollControls) els.scrollControls.hidden = !on;
   if (!on) {
     cancelAnimationFrame(autoScrollRaf);
     autoScrollRaf = 0;
     autoScrollLastTs = 0;
+    autoScrollCarryPx = 0;
   } else {
     autoScrollLastTs = 0;
+    autoScrollCarryPx = 0;
     autoScrollRaf = requestAnimationFrame(autoScrollTick);
   }
+}
+
+function timeSigFromUi() {
+  const beats = Number((els.metroBeats && els.metroBeats.value) || "4");
+  const denom = beats <= 5 ? 4 : 8; // UI only provides numerator; infer denominator from common patterns.
+  return { beats, denom };
+}
+
+function effectiveBeatsPerBar(ts) {
+  if (ts.denom !== 8) return ts.beats;
+  // Compound meters (6/8, 9/8, 12/8) are typically felt in dotted quarters: 2, 3, 4.
+  if (ts.beats >= 6 && ts.beats % 3 === 0) return ts.beats / 3;
+  // Irregular /8: feel it in 2s/3s, but we keep it simple and map roughly to quarter-note pulses.
+  return Math.max(2, Math.round(ts.beats / 2));
+}
+
+function scrollBaseSpeed() {
+  const bpm = Number((els.metroBpm && els.metroBpm.value) || "100");
+  const ts = timeSigFromUi();
+  const eff = effectiveBeatsPerBar(ts);
+  // Tuned so that 4/4 @ 100 BPM ~= 2.5 (current default). Higher BPM feels faster.
+  const k = 1.5;
+  const base = (bpm / 60) * (eff / 4) * k;
+  return clamp(base, 0.5, 10);
+}
+
+function setScrollSpeed(v) {
+  if (!els.scrollSpeed || !els.scrollSpeedText) return;
+  const n = clamp(Number(v || 0), 0, 12);
+  els.scrollSpeed.value = String(n);
+  els.scrollSpeedText.textContent = n.toFixed(2).replace(/\.00$/, "");
+}
+
+function setActiveScrollPreset(key) {
+  activeScrollPreset = key;
+  const activeBtn =
+    key === "slow" ? els.scrollPresetSlow : key === "fast" ? els.scrollPresetFast : key === "normal" ? els.scrollPresetNormal : null;
+  const btns = [els.scrollPresetSlow, els.scrollPresetNormal, els.scrollPresetFast];
+  for (const b of btns) {
+    if (!b) continue;
+    b.classList.toggle("is-active", !!activeBtn && b === activeBtn);
+  }
+}
+
+function applyScrollPreset(key) {
+  const base = scrollBaseSpeed();
+  const mult = key === "slow" ? 0.8 : key === "fast" ? 1.25 : 1.0;
+  const speed = clamp(base * mult, 0, 12);
+  setActiveScrollPreset(key);
+  setScrollSpeed(speed);
+}
+
+function updateScrollPresetsUi() {
+  const base = scrollBaseSpeed();
+  const presets = [
+    { key: "slow", btn: els.scrollPresetSlow, mult: 0.8, label: "慢" },
+    { key: "normal", btn: els.scrollPresetNormal, mult: 1.0, label: "标准" },
+    { key: "fast", btn: els.scrollPresetFast, mult: 1.25, label: "快" },
+  ];
+  for (const p of presets) {
+    if (!p.btn) continue;
+    const v = clamp(base * p.mult, 0, 12);
+    p.btn.textContent = `${p.label} ${v.toFixed(1)}`.replace(/\.0$/, "");
+  }
+  if (activeScrollPreset) applyScrollPreset(activeScrollPreset);
 }
 
 function autoScrollTick(ts) {
@@ -710,7 +2046,7 @@ function autoScrollTick(ts) {
   const dt = (ts - autoScrollLastTs) / 1000;
   autoScrollLastTs = ts;
 
-  const speed = Number(els.scrollSpeed.value || "0");
+  const speed = Number((els.scrollSpeed && els.scrollSpeed.value) || "0");
   const fontPx = Number(
     getComputedStyle(document.documentElement).getPropertyValue("--sheetFontSize").replace("px", "")
   );
@@ -719,7 +2055,14 @@ function autoScrollTick(ts) {
 
   const scroller = getDetailScrollEl();
   const maxScroll = scroller.scrollHeight - scroller.clientHeight;
-  scroller.scrollTop = clamp(scroller.scrollTop + delta, 0, Math.max(0, maxScroll));
+  const prev = scroller.scrollTop;
+  const move = delta + autoScrollCarryPx;
+  const next = clamp(prev + move, 0, Math.max(0, maxScroll));
+  scroller.scrollTop = next;
+  const applied = scroller.scrollTop - prev;
+  // Some browsers effectively quantize scrollTop to integer pixels; carry the remainder forward.
+  autoScrollCarryPx = move - applied;
+  if (Math.abs(autoScrollCarryPx) > 1000) autoScrollCarryPx = 0;
 
   if (scroller.scrollTop >= maxScroll - 1) {
     setAutoScroll(false);
@@ -814,6 +2157,33 @@ class Metronome {
 const metro = new Metronome();
 let tapTimes = [];
 
+// Exercise page metronome (same style as Scores page, but isolated IDs)
+const exMetro = new Metronome();
+
+function setExMetronomeUiOpen(on) {
+  if (!els.exMetronomeControls || !els.exBtnMetronome) return;
+  els.exMetronomeControls.hidden = !on;
+  els.exBtnMetronome.textContent = on ? "收起节拍器" : "节拍器";
+}
+
+function stopExerciseMetronome() {
+  if (!exMetro.isRunning) return;
+  exMetro.stop();
+  setExMetronomeRunningUi(false);
+}
+
+function setExMetronomeRunningUi(running) {
+  if (els.exBtnMetroToggle) els.exBtnMetroToggle.textContent = running ? "运行中" : "开始";
+}
+
+function pulseExTick(isAccent) {
+  if (!els.exMetroPulse) return;
+  els.exMetroPulse.classList.remove("is-on", "is-accent");
+  void els.exMetroPulse.offsetWidth;
+  els.exMetroPulse.classList.add(isAccent ? "is-accent" : "is-on");
+  window.setTimeout(() => els.exMetroPulse.classList.remove("is-on", "is-accent"), 80);
+}
+
 function setMetronomeUiOpen(on) {
   if (!els.metronomeControls || !els.btnMetronome) return;
   els.metronomeControls.hidden = !on;
@@ -837,7 +2207,7 @@ function pulseTick(isAccent) {
 
 function installServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
-  navigator.serviceWorker.register("./sw.js?v=13").catch(() => {});
+  navigator.serviceWorker.register("./sw.js?v=28").catch(() => {});
 }
 
 function wireUi() {
@@ -848,6 +2218,131 @@ function wireUi() {
 
   on(els.btnGoPractice, "click", () => setPage("practice"));
   on(els.btnGoScores, "click", () => setPage("scores"));
+  on(els.btnOpenTuner, "click", () => setPage("tuner"));
+  on(els.btnTunerBack, "click", () => setPage("me"));
+  on(els.btnTunerMode, "click", () => {
+    const mode = getTunerMode() === "custom" ? "preset" : "custom";
+    setTunerMode(mode);
+    renderTuner();
+  });
+  on(els.btnTunerPreset, "click", () => {
+    const mode = getTunerMode() === "custom" ? "preset" : "custom";
+    setTunerMode(mode);
+    renderTuner();
+  });
+  on(els.btnTunerMic, "click", async () => {
+    if (!els.btnTunerMic) return;
+    try {
+      if (tunerMicRaf) {
+        stopTunerMic();
+        els.btnTunerMic.textContent = "开始监听";
+      } else {
+        await startTunerMic();
+        els.btnTunerMic.textContent = "停止监听";
+      }
+    } catch (err) {
+      stopTunerMic();
+      els.btnTunerMic.textContent = "开始监听";
+      showDialog("无法开启麦克风", `请检查浏览器麦克风权限。<br/><br/>错误：${String(err && err.message ? err.message : err)}`, { showClose: true });
+    }
+  });
+
+  // Practice / plan builder
+  on(els.btnPracticeCustomize, "click", () => openPlanBuilder());
+  on(els.btnPlanBack, "click", () => setPage("practice"));
+  on(els.planSearch, "input", () => renderPlanBuilder());
+  on(els.btnPlanSave, "click", () => {
+    if (!planDraft) return;
+    const name = String((els.planNameInput && els.planNameInput.value) || "").trim().replace(/\s+/g, " ").slice(0, 40);
+    if (!name) {
+      showDialog("提示", "请填写训练计划名称。", { showClose: true });
+      return;
+    }
+    if (planDraft.items.length === 0) {
+      showDialog("提示", "请至少添加 1 个练习。", { showClose: true });
+      return;
+    }
+    const now = Date.now();
+    const saved = { id: planDraft.id, name, items: planDraft.items.slice(0), createdAt: now, updatedAt: now };
+    plans.unshift(saved);
+    // Keep a small list for now
+    plans = plans.slice(0, 20);
+    savePlans();
+    planDraft = null;
+    setPage("practice");
+    renderPractice();
+  });
+  on(els.planNameInput, "input", () => {
+    if (!planDraft || !els.planNameInput) return;
+    planDraft.name = els.planNameInput.value;
+  });
+
+  // Exercise page
+  on(els.btnExerciseBack, "click", () => {
+    stopMic();
+    stopExerciseMetronome();
+    setPage("practice");
+  });
+  exMetro.onTick = (_beatIndex, isAccent) => pulseExTick(isAccent);
+  on(els.exBtnMetronome, "click", () => setExMetronomeUiOpen(!!(els.exMetronomeControls && els.exMetronomeControls.hidden)));
+  on(els.exMetroBpm, "input", () => {
+    if (!activeExercise || !els.exMetroBpm || !els.exMetroBpmText) return;
+    const bpm = clamp(Number(els.exMetroBpm.value) || 80, 40, 240);
+    activeExercise.bpm = bpm;
+    els.exMetroBpmText.textContent = String(bpm);
+    if (els.exerciseBpmText) els.exerciseBpmText.textContent = String(bpm);
+    exMetro.setTempo(bpm);
+    localStorage.setItem("exMetroBpm", String(bpm));
+  });
+  on(els.exMetroBeats, "change", () => {
+    if (!els.exMetroBeats) return;
+    exMetro.setBeatsPerBar(Number(els.exMetroBeats.value));
+    localStorage.setItem("exMetroBeats", String(els.exMetroBeats.value));
+  });
+  on(els.exMetroAccent, "change", () => {
+    if (!els.exMetroAccent) return;
+    exMetro.setAccent(!!els.exMetroAccent.checked);
+    localStorage.setItem("exMetroAccent", els.exMetroAccent.checked ? "1" : "0");
+  });
+  on(els.exBtnMetroToggle, "click", async () => {
+    if (!exMetro.isRunning) {
+      try {
+        await exMetro.start();
+        setExMetronomeRunningUi(true);
+      } catch {}
+    }
+  });
+  on(els.exBtnMetroStop, "click", () => stopExerciseMetronome());
+  on(els.exBtnMetroTap, "click", async () => {
+    const t = performance.now();
+    tapTimes.push(t);
+    tapTimes = tapTimes.filter((x) => t - x <= 2500);
+    if (tapTimes.length >= 2) {
+      const diffs = [];
+      for (let i = 1; i < tapTimes.length; i++) diffs.push(tapTimes[i] - tapTimes[i - 1]);
+      diffs.sort((a, b) => a - b);
+      const mid = diffs[Math.floor(diffs.length / 2)];
+      const bpm = clamp(Math.round(60000 / mid), 40, 240);
+      if (els.exMetroBpm) els.exMetroBpm.value = String(bpm);
+      if (els.exMetroBpmText) els.exMetroBpmText.textContent = String(bpm);
+      if (els.exerciseBpmText) els.exerciseBpmText.textContent = String(bpm);
+      if (activeExercise) activeExercise.bpm = bpm;
+      exMetro.setTempo(bpm);
+      localStorage.setItem("exMetroBpm", String(bpm));
+    } else {
+      // prime audio context
+      try { await exMetro._ensureContext(); } catch {}
+    }
+  });
+  on(els.btnMicToggle, "click", async () => {
+    try {
+      if (micRaf) stopMic();
+      else await startMic();
+    } catch (err) {
+      stopMic();
+      showDialog("无法开启麦克风", `请检查浏览器麦克风权限。<br/><br/>错误：${String(err && err.message ? err.message : err)}`, { showClose: true });
+    }
+  });
 
   // Scores page
   on(els.searchInput, "input", renderScores);
@@ -959,10 +2454,20 @@ function wireUi() {
     , { showClose: true });
   });
 
-  on(els.btnAutoScroll, "click", () => setAutoScroll(!autoScrollOn));
+  on(els.btnAutoScroll, "click", () => {
+    setAutoScroll(!autoScrollOn);
+    updateScrollPresetsUi();
+  });
+
+  on(els.scrollPresetSlow, "click", () => applyScrollPreset("slow"));
+  on(els.scrollPresetNormal, "click", () => applyScrollPreset("normal"));
+  on(els.scrollPresetFast, "click", () => applyScrollPreset("fast"));
+
   on(els.scrollSpeed, "input", () => {
     if (!els.scrollSpeed || !els.scrollSpeedText) return;
     els.scrollSpeedText.textContent = Number(els.scrollSpeed.value).toFixed(2).replace(/\.00$/, "");
+    // User manually adjusted: stop following presets.
+    if (activeScrollPreset) setActiveScrollPreset(null);
   });
   on(els.btnScrollStop, "click", () => setAutoScroll(false));
   on(els.btnScrollTop, "click", () => (getDetailScrollEl().scrollTop = 0));
@@ -973,17 +2478,19 @@ function wireUi() {
   on(els.btnMetronome, "click", () => setMetronomeUiOpen(!!(els.metronomeControls && els.metronomeControls.hidden)));
 
   on(els.metroBpm, "input", () => {
-    if (!els.metroBpm || !els.metroBpmText || !els.metroFloatText) return;
+    if (!els.metroBpm || !els.metroBpmText) return;
     els.metroBpmText.textContent = els.metroBpm.value;
     metro.setTempo(Number(els.metroBpm.value));
-    els.metroFloatText.textContent = `节拍器 ${els.metroBpm.value}`;
+    if (els.metroFloatText) els.metroFloatText.textContent = `节拍器 ${els.metroBpm.value}`;
     localStorage.setItem("metroBpm", String(els.metroBpm.value));
+    updateScrollPresetsUi();
   });
 
   on(els.metroBeats, "change", () => {
     if (!els.metroBeats) return;
     metro.setBeatsPerBar(Number(els.metroBeats.value));
     localStorage.setItem("metroBeats", String(els.metroBeats.value));
+    updateScrollPresetsUi();
   });
 
   on(els.metroAccent, "change", () => {
@@ -1020,12 +2527,13 @@ function wireUi() {
       const mid = diffs[Math.floor(diffs.length / 2)];
       const bpm = Math.round(60000 / mid);
       const clamped = clamp(bpm, 40, 240);
-      if (!els.metroBpm || !els.metroBpmText || !els.metroFloatText) return;
+      if (!els.metroBpm || !els.metroBpmText) return;
       els.metroBpm.value = String(clamped);
       els.metroBpmText.textContent = String(clamped);
       metro.setTempo(clamped);
-      els.metroFloatText.textContent = `节拍器 ${clamped}`;
+      if (els.metroFloatText) els.metroFloatText.textContent = `节拍器 ${clamped}`;
       localStorage.setItem("metroBpm", String(clamped));
+      updateScrollPresetsUi();
     } else {
       await metro._ensureContext();
     }
@@ -1079,6 +2587,10 @@ async function boot() {
     setMetronomeUiOpen(true);
     setMetronomeRunningUi(false);
   }
+  updateScrollPresetsUi();
+
+  loadPlans();
+  renderPractice();
 
   activeSongId = localStorage.getItem("activeSongId");
 

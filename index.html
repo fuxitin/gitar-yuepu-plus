@@ -8,12 +8,12 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
 
-    <link rel="manifest" href="./manifest.webmanifest?v=13" />
+    <link rel="manifest" href="./manifest.webmanifest?v=15" />
     <link rel="icon" href="./assets/icon-192.png" />
     <link rel="apple-touch-icon" href="./assets/icon-192.png" />
 
     <title>吉他谱</title>
-    <link rel="stylesheet" href="./styles.css?v=13" />
+    <link rel="stylesheet" href="./styles.css?v=28" />
   </head>
   <body>
     <div id="app" class="app">
@@ -146,7 +146,6 @@
 
             <div class="detailQuick detailQuick--sticky">
               <button id="btnMetronome" class="navPill" type="button">收起节拍器</button>
-              <button id="btnAutoScroll" class="navPill navPill--accent" type="button">自动滚动</button>
             </div>
 
             <div id="metronomeControls" class="metro">
@@ -182,16 +181,28 @@
               </div>
             </div>
 
-            <div id="scrollControls" class="scrollControls" hidden>
-              <div class="scrollControls__row">
-                <div class="scrollControls__label">速度</div>
-                <input id="scrollSpeed" type="range" min="0" max="12" step="0.25" value="2.5" />
-                <div id="scrollSpeedText" class="scrollControls__value">2.5</div>
-              </div>
-              <div class="scrollControls__row">
-                <button id="btnScrollStop" class="btn btn--ghost btn--sm" type="button">停止</button>
-                <button id="btnScrollTop" class="btn btn--ghost btn--sm" type="button">回到顶部</button>
-                <button id="btnScrollBottom" class="btn btn--ghost btn--sm" type="button">到底部</button>
+            <!-- Auto-scroll: floating dock (right side) -->
+            <div class="scrollDock" aria-label="自动滚动面板">
+              <button id="btnAutoScroll" class="navPill navPill--accent scrollDock__btn" type="button">自动滚动</button>
+              <div id="scrollControls" class="scrollControls scrollDock__panel" hidden>
+                <div class="scrollControls__row">
+                  <div class="scrollControls__label">预设</div>
+                  <div class="scrollPresets" role="group" aria-label="滚动速度预设">
+                    <button id="scrollPresetSlow" class="chip chip--ghost chip--sm" type="button">慢</button>
+                    <button id="scrollPresetNormal" class="chip chip--ghost chip--sm is-active" type="button">标准</button>
+                    <button id="scrollPresetFast" class="chip chip--ghost chip--sm" type="button">快</button>
+                  </div>
+                </div>
+                <div class="scrollControls__row">
+                  <div class="scrollControls__label">速度</div>
+                  <input id="scrollSpeed" type="range" min="0" max="12" step="0.25" value="2.5" />
+                  <div id="scrollSpeedText" class="scrollControls__value">2.5</div>
+                </div>
+                <div class="scrollControls__row">
+                  <button id="btnScrollStop" class="btn btn--ghost btn--sm" type="button">停止</button>
+                  <button id="btnScrollTop" class="btn btn--ghost btn--sm" type="button">回到顶部</button>
+                  <button id="btnScrollBottom" class="btn btn--ghost btn--sm" type="button">到底部</button>
+                </div>
               </div>
             </div>
 
@@ -240,31 +251,143 @@
               <div class="muted">还差 1050 XP</div>
             </div>
 
-            <div class="sectionTitle">快速训练</div>
-            <div class="list">
-              <div class="listCard">
-                <div class="listCard__meta">
-                  <div class="listCard__title">15 分钟热身</div>
-                  <div class="listCard__sub">3 个练习 · 15 分钟 · +180 XP</div>
-                </div>
-                <button class="playBtn" type="button" disabled>▶</button>
+            <div class="sectionRow">
+              <div class="sectionTitle" style="margin:0">快速训练</div>
+              <button id="btnPracticeCustomize" class="sectionAction" type="button">＋ 自定义</button>
+            </div>
+            <div id="quickPlanList" class="list" aria-label="快速训练列表"></div>
+
+            <div class="sectionTitle">练习项目</div>
+            <div id="exerciseList" class="list" aria-label="练习项目列表"></div>
+
+            <div class="goodJob" role="note" aria-label="鼓励卡片">
+              <div class="goodJob__icon">★</div>
+              <div class="goodJob__title">你做得很棒！</div>
+              <div class="goodJob__sub">再完成 3 个练习就能达成今日目标</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Plan builder -->
+        <section id="pagePlan" class="page" data-page="plan" aria-label="创建训练计划">
+          <div class="page__scroll">
+            <div class="planHead">
+              <button id="btnPlanBack" class="navBtn" type="button" aria-label="返回">‹</button>
+              <div class="planHead__title">创建训练计划</div>
+              <button id="btnPlanSave" class="pill pill--accent" type="button">保存</button>
+            </div>
+
+            <div class="card planName">
+              <input id="planNameInput" class="planName__input" type="text" placeholder="我的自定义训练" maxlength="40" />
+            </div>
+
+            <div class="planSummary">
+              <div class="planSummary__title">你的训练内容</div>
+              <div id="planSummaryText" class="planSummary__sub">0 个练习 · 总计 0 分钟</div>
+            </div>
+
+            <div class="planDrop">
+              <div id="planSelectedEmpty" class="planDrop__empty">
+                <div class="planDrop__plus">＋</div>
+                <div class="planDrop__text">从下方添加练习来构建你的训练计划</div>
               </div>
-              <div class="listCard">
-                <div class="listCard__meta">
-                  <div class="listCard__title">新手基础</div>
-                  <div class="listCard__sub">4 个练习 · 25 分钟 · +250 XP</div>
-                </div>
-                <button class="playBtn" type="button" disabled>▶</button>
+              <div id="planSelectedList" class="list" hidden></div>
+            </div>
+
+            <div class="sectionTitle">添加练习</div>
+            <div class="search">
+              <div class="search__icon" aria-hidden="true">🔎</div>
+              <input id="planSearch" class="search__input" type="search" placeholder="搜索练习..." />
+            </div>
+            <div id="planAddList" class="list" aria-label="可添加练习列表"></div>
+          </div>
+        </section>
+
+        <!-- Exercise detail (Training) -->
+        <section id="pageExercise" class="page" data-page="exercise" aria-label="练习详情">
+          <div class="page__scroll">
+            <div class="exHead">
+              <button id="btnExerciseBack" class="navBtn" type="button" aria-label="返回">‹</button>
+              <div class="exHead__meta">
+                <div id="exerciseTitle" class="exHead__title">五声音阶</div>
+                <div id="exerciseSub" class="exHead__sub">小调五声音阶第一把位</div>
               </div>
-              <div class="listCard">
-                <div class="listCard__meta">
-                  <div class="listCard__title">速度训练</div>
-                  <div class="listCard__sub">5 个练习 · 30 分钟 · +400 XP</div>
-                </div>
-                <button class="playBtn" type="button" disabled>▶</button>
+              <div class="exHead__xp">⚡ <span id="exerciseXp">+100</span> XP</div>
+            </div>
+
+            <div class="exProgress">
+              <div class="exProgress__row">
+                <div id="exerciseStep" class="exProgress__step">进度：1 / 12</div>
+                <div id="exercisePct" class="exProgress__pct">0%</div>
+              </div>
+              <div class="bar"><div id="exerciseBar" class="bar__fill" style="width: 0%"></div></div>
+            </div>
+
+            <div class="detailQuick exTools">
+              <button id="exBtnMetronome" class="navPill" type="button">收起节拍器</button>
+            </div>
+
+            <div id="exMetronomeControls" class="metro">
+              <div class="metro__row">
+                <div class="metro__label">BPM</div>
+                <input id="exMetroBpm" type="range" min="40" max="240" step="1" value="80" />
+                <div id="exMetroBpmText" class="metro__value">80</div>
+              </div>
+              <div class="metro__row">
+                <div class="metro__label">拍号</div>
+                <select id="exMetroBeats" class="select">
+                  <option value="2">2/4</option>
+                  <option value="3">3/4</option>
+                  <option value="4" selected>4/4</option>
+                  <option value="5">5/4</option>
+                  <option value="6">6/8</option>
+                  <option value="7">7/8</option>
+                  <option value="8">8/8</option>
+                  <option value="9">9/8</option>
+                  <option value="10">10/8</option>
+                  <option value="12">12/8</option>
+                </select>
+                <label class="check">
+                  <input id="exMetroAccent" type="checkbox" checked />
+                  <span>重音</span>
+                </label>
+                <div id="exMetroPulse" class="metro__pulse" aria-label="节拍指示"></div>
+              </div>
+              <div class="metro__row">
+                <button id="exBtnMetroToggle" class="btn btn--primary btn--sm" type="button">开始</button>
+                <button id="exBtnMetroTap" class="btn btn--ghost btn--sm" type="button">点按测速</button>
+                <button id="exBtnMetroStop" class="btn btn--ghost btn--sm" type="button">停止</button>
               </div>
             </div>
-            <div class="muted">训练页先做静态占位，后续我们再把节拍器/速度练习/跟练加进去。</div>
+
+            <div id="exerciseKeyCard" class="card exKeyCard">
+              <div class="exKeyCard__row">
+                <div class="exKeyCard__label">调型选择</div>
+                <div class="exKeyCard__right">速度：<span id="exerciseBpmText">80</span> BPM</div>
+              </div>
+              <div id="exerciseKeys" class="exKeys" role="group" aria-label="调型选择"></div>
+            </div>
+
+            <div class="card exFretCard">
+              <div class="exFretCard__title">吉他指板</div>
+              <div id="fretWrap" class="fretWrap" aria-label="吉他指板区域">
+                <div id="fretboard" class="fretboard" aria-label="指板"></div>
+              </div>
+              <div class="exLegend">
+                <div class="exDot"></div>
+                <div class="muted" style="font-weight:900">当前音符（弹对会点亮）</div>
+                <div id="micStatus" class="micStatus">麦克风：未开启</div>
+              </div>
+            </div>
+
+            <div class="card exNotes">
+              <div class="card__title">练习要点</div>
+              <ul id="exerciseBullets" class="exBullets"></ul>
+            </div>
+          </div>
+
+          <div class="exMicDock" aria-label="麦克风控制">
+            <button id="btnMicToggle" class="navPill" type="button" aria-label="麦克风">麦克风</button>
           </div>
         </section>
 
@@ -336,8 +459,126 @@
               <span class="sectionTitle__icon" aria-hidden="true">⚙</span>
               设置
             </div>
-            <div class="list">
-              <div class="listItem muted">设置页先占位，后续再补充深色模式、字体、备份等。</div>
+            <div class="settingsCard">
+              <button class="settingsRow" type="button" disabled>
+                <div class="settingsRow__icon">☀</div>
+                <div class="settingsRow__meta">
+                  <div class="settingsRow__title">深色模式</div>
+                  <div class="settingsRow__sub">已关闭</div>
+                </div>
+                <div class="settingsRow__right">
+                  <div class="switch is-off" aria-hidden="true"></div>
+                </div>
+              </button>
+
+              <button class="settingsRow" type="button" disabled>
+                <div class="settingsRow__icon">🔔</div>
+                <div class="settingsRow__meta">
+                  <div class="settingsRow__title">通知提醒</div>
+                  <div class="settingsRow__sub">每日提醒和更新</div>
+                </div>
+                <div class="settingsRow__right">
+                  <div class="switch is-on" aria-hidden="true"></div>
+                </div>
+              </button>
+
+              <button class="settingsRow" type="button" disabled>
+                <div class="settingsRow__icon">📈</div>
+                <div class="settingsRow__meta">
+                  <div class="settingsRow__title">练习统计</div>
+                  <div class="settingsRow__sub">查看详细进度</div>
+                </div>
+                <div class="settingsRow__chev">›</div>
+              </button>
+
+              <button class="settingsRow" type="button" disabled>
+                <div class="settingsRow__icon">♪</div>
+                <div class="settingsRow__meta">
+                  <div class="settingsRow__title">音乐库</div>
+                  <div class="settingsRow__sub">管理你的曲谱和歌曲</div>
+                </div>
+                <div class="settingsRow__chev">›</div>
+              </button>
+
+              <button id="btnOpenTuner" class="settingsRow" type="button">
+                <div class="settingsRow__icon">🎚</div>
+                <div class="settingsRow__meta">
+                  <div class="settingsRow__title">调音器</div>
+                  <div class="settingsRow__sub">调整你的吉他音准</div>
+                </div>
+                <div class="settingsRow__chev">›</div>
+              </button>
+
+              <button class="settingsRow settingsRow--danger" type="button" disabled>
+                <div class="settingsRow__icon">⟲</div>
+                <div class="settingsRow__meta">
+                  <div class="settingsRow__title">退出登录</div>
+                  <div class="settingsRow__sub">（占位）</div>
+                </div>
+                <div class="settingsRow__chev">›</div>
+              </button>
+            </div>
+
+            <div class="muted" style="text-align:center; margin-top: 14px;">加入时间 2026年1月</div>
+          </div>
+        </section>
+
+        <!-- Tuner -->
+        <section id="pageTuner" class="page" data-page="tuner" aria-label="调弦工具">
+          <div class="page__scroll">
+            <div class="planHead">
+              <button id="btnTunerBack" class="navBtn" type="button" aria-label="返回">‹</button>
+              <div class="planHead__title">调弦工具</div>
+              <button id="btnTunerMode" class="pill" type="button">自定义模式</button>
+            </div>
+            <div class="muted" style="margin-top:-6px; margin-bottom: 12px;">选择预设调型或自定义调弦</div>
+
+            <div class="card tunerModeCard">
+              <div class="tunerModeCard__row">
+                <div class="tunerModeCard__title">调弦模式</div>
+                <button id="btnTunerPreset" class="pill pill--accent" type="button">预设模式</button>
+              </div>
+              <div id="tunerPresets" class="tunerPresets" aria-label="预设调弦列表"></div>
+            </div>
+
+            <div class="card tunerCurrent">
+              <div class="tunerCurrent__label">当前调型</div>
+              <div id="tunerCurrentName" class="tunerCurrent__name">标准调弦</div>
+              <div id="tunerCurrentSub" class="tunerCurrent__sub">最常用的调弦</div>
+            </div>
+
+            <div class="card tunerStrings">
+              <div class="card__title">吉他弦调音</div>
+              <div id="tunerStringList" class="tunerStringList" aria-label="弦列表"></div>
+            </div>
+
+            <div class="card tunerListen">
+              <div class="tunerListen__row">
+                <div>
+                  <div class="tunerListen__title">实时监听</div>
+                  <div class="tunerListen__sub">打开麦克风显示当前音高（单音更准）</div>
+                </div>
+                <button id="btnTunerMic" class="pill pill--accent" type="button">开始监听</button>
+              </div>
+              <div class="tunerListen__readout">
+                <div id="tunerMicNote" class="tunerListen__note">--</div>
+                <div id="tunerMicHz" class="tunerListen__hz">-- Hz</div>
+                <div id="tunerMicCents" class="tunerListen__cents">-- cents</div>
+                <div class="tunerMeter" aria-label="音准指示">
+                  <div class="tunerMeter__center" aria-hidden="true"></div>
+                  <div id="tunerPointer" class="tunerMeter__pointer" aria-hidden="true"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card tunerTips">
+              <div class="card__title">调弦提示</div>
+              <ul class="exBullets">
+                <li>点击音量图标播放参考音，根据音高调弦</li>
+                <li>顺时针拧紧弦钮会升高音高，逆时针会降低</li>
+                <li>建议从低音弦（第6弦）开始调起</li>
+                <li>新换的弦需要多次调整才能稳定</li>
+              </ul>
             </div>
           </div>
         </section>
@@ -373,6 +614,6 @@
       </dialog>
     </div>
 
-    <script src="./app.js?v=13" type="module"></script>
+    <script src="./app.js?v=28" type="module"></script>
   </body>
 </html>

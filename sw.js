@@ -1,9 +1,9 @@
 // Simple cache-first service worker for offline viewing.
-const CACHE = "gtv-cache-v13";
+const CACHE = "gtv-cache-v28";
 const ASSETS = [
-  "./styles.css?v=13",
-  "./app.js?v=13",
-  "./manifest.webmanifest?v=13",
+  "./styles.css?v=28",
+  "./app.js?v=28",
+  "./manifest.webmanifest?v=15",
   "./assets/icon-192.png",
   "./assets/icon-512.png"
 ];
